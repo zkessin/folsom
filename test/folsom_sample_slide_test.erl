@@ -101,5 +101,5 @@ check_table(Slide, Moments) ->
     {Ks, Vs} = lists:unzip(Tab),
     ExpectedVs = lists:sort(lists:flatten([lists:duplicate(10, N) || N <- Moments])),
     Keys = lists:usort(Ks),
-    ?assertEqual(Moments, Keys),
+    ?assertEqual([{X,1} || X <- Moments], Keys),
     ?assertEqual(ExpectedVs, lists:sort(Vs)).

@@ -95,7 +95,8 @@ postcondition(#state{values=Values0, moment=Moment}, {call, ?MODULE, get_values,
     end;
 postcondition(#state{values=Values, sample=Sample, moment=Moment}, {call, ?MODULE, trim, _}, _TrimCnt) ->
     %% check that values and the actual table contents are the same after a trim
-    Table = ets:tab2list(Sample#slide.reservoir),
+    Table0 = ets:tab2list(Sample#slide.reservoir),
+    Table = [{X, Y} || {{X, _}, Y} <- Table0],
     Model = lists:sort(trim(Values, Moment, ?WINDOW)),
     case Model == lists:sort(Table) of
         true ->
