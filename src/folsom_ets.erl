@@ -29,6 +29,8 @@
          add_handler/3,
          add_handler/4,
          add_handler/5,
+         tag_handler/2,
+         untag_handler/2,
          delete_handler/1,
          handler_exists/1,
          notify/1,
@@ -39,11 +41,13 @@
          get_handlers_info/0,
          get_info/1,
          get_values/1,
-         get_history_values/2
+         get_history_values/2,
+         get_group_values/1,
+         get_group_values/2
         ]).
 
 -record(metric, {
-          tags = [],
+          tags = sets:new(),
           type,
           history_size
          }).
@@ -65,6 +69,22 @@ add_handler(Type, Name, SampleType, SampleSize) ->
 
 add_handler(Type, Name, SampleType, SampleSize, Alpha) ->
     maybe_add_handler(Type, Name, SampleType, SampleSize, Alpha, handler_exists(Name)).
+
+tag_handler(Name, Tag) ->
+    case handler_exists(Name) of
+        true ->
+            add_tag(Name, Tag);
+        false ->
+            {error, Name, nonexistent_metric}
+    end.
+
+untag_handler(Name, Tag) ->
+    case handler_exists(Name) of
+        true ->
+            rm_tag(Name, Tag);
+        false ->
+            {error, Name, nonexistent_metric}
+    end.
 
 delete_handler(Name) ->
     {_, Info} = get_info(Name),
@@ -148,6 +168,13 @@ get_values(_, Type) ->
 get_history_values(Name, Count) ->
     folsom_metrics_history:get_events(Name, Count).
 
+get_group_values(Tag) ->
+    folsom_ets:get_group_values(Tag, '_').
+
+get_group_values(Tag, Type) ->
+    Metrics = ets:match(?FOLSOM_TABLE, {'$1', {metric, '$2', Type, '_'}}),
+    [{Name, get_values(Name)} || [Name, Tags] <- Metrics, sets:is_element(Tag, Tags)].
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
@@ -228,6 +255,16 @@ maybe_add_handler(Type, _, _, _, _, false) ->
 maybe_add_handler(_, Name, _, _, _, true) ->
     {error, Name, metric_already_exists}.
 
+add_tag(Name, Tag) ->
+    M = #metric{tags=Tags} = ets:lookup_element(?FOLSOM_TABLE, Name, 2),
+    true = ets:update_element(?FOLSOM_TABLE, Name, {2, M#metric{tags=sets:add_element(Tag, Tags)}}),
+    ok.
+
+rm_tag(Name, Tag) ->
+    M = #metric{tags=Tags} = ets:lookup_element(?FOLSOM_TABLE, Name, 2),
+    true = ets:update_element(?FOLSOM_TABLE, Name, {2, M#metric{tags=sets:del_element(Tag, Tags)}}),
+    ok.
+
 delete_metric(Name, history) ->
     History = folsom_metrics_history:get_value(Name),
     ok = delete_history(Name, History),
@@ -243,7 +280,7 @@ delete_metric(Name, duration) ->
     true = ets:delete(?FOLSOM_TABLE, Name),
     ok;
 delete_metric(Name, counter) ->
-    true = ets:delete(?COUNTER_TABLE, Name),
+    ok = folsom_metrics_counter:delete(Name),
     true = ets:delete(?FOLSOM_TABLE, Name),
     ok;
 delete_metric(Name, gauge) ->
@@ -263,9 +300,9 @@ delete_metric(Name, meter_reader) ->
 delete_metric(Name, spiral) ->
     #spiral{tid=Tid, server=Pid} = folsom_metrics_spiral:get_value(Name),
     folsom_sample_slide_server:stop(Pid),
-    true = ets:delete(Tid),
     ets:delete(?SPIRAL_TABLE, Name),
     ets:delete(?FOLSOM_TABLE, Name),
+    ets:delete(Tid),
     ok.
 
 delete_histogram(Name, #histogram{type = uniform, sample = #uniform{reservoir = Reservoir}}) ->
@@ -314,6 +351,13 @@ notify(Name, {dec, Value}, counter, true) ->
 notify(Name, {dec, Value}, counter, false) ->
     add_handler(counter, Name),
     folsom_metrics_counter:dec(Name, Value),
+    ok;
+notify(Name, clear, counter, true) ->
+    folsom_metrics_counter:clear(Name),
+    ok;
+notify(Name, clear, counter, false) ->
+    add_handler(counter, Name),
+    folsom_metrics_counter:clear(Name),
     ok;
 notify(Name, Value, gauge, true) ->
     folsom_metrics_gauge:update(Name, Value),

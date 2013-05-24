@@ -29,12 +29,15 @@
 -export([
          create_metrics/0,
          populate_metrics/0,
+         tag_metrics/0,
          check_metrics/0,
+         check_group_metrics/0,
          delete_metrics/0,
          vm_metrics/0,
          counter_metric/2,
          cpu_topology/0,
-         c_compiler_used/0
+         c_compiler_used/0,
+	 create_delete_metrics/0
         ]).
 
 -define(DATA, [0, 1, 5, 10, 100, 200, 500, 750, 1000, 2000, 5000]).
@@ -46,6 +49,7 @@
 
 create_metrics() ->
     ok = folsom_metrics:new_counter(counter),
+    ok = folsom_metrics:new_counter(counter2),
     ok = folsom_metrics:new_gauge(<<"gauge">>),
 
     ok = folsom_metrics:new_histogram(<<"uniform">>, uniform, 5000),
@@ -82,13 +86,30 @@ create_metrics() ->
     %% check a server got started for the spiral metric
     1 = length(supervisor:which_children(folsom_sample_slide_sup)),
 
-    14 = length(folsom_metrics:get_metrics()),
+    15 = length(folsom_metrics:get_metrics()),
 
     ?debugFmt("~n~nmetrics: ~p~n", [folsom_metrics:get_metrics()]).
+
+tag_metrics() ->
+    Group = "mygroup",
+    ok = folsom_metrics:tag_metric(counter, Group),
+    ok = folsom_metrics:tag_metric(counter2, Group),
+    ok = folsom_metrics:tag_metric(<<"gauge">>, Group),
+    ok = folsom_metrics:tag_metric(meter, Group),
+    ok = folsom_metrics:tag_metric(spiral, Group),
+    ?debugFmt("~n~ntagged metrics: ~p, ~p, ~p, ~p and ~p in group ~p~n", [counter,counter2,<<"gauge">>,meter,spiral,Group]).
 
 populate_metrics() ->
     ok = folsom_metrics:notify({counter, {inc, 1}}),
     ok = folsom_metrics:notify({counter, {dec, 1}}),
+
+    ok = folsom_metrics:notify({counter2, {inc, 10}}),
+    ok = folsom_metrics:notify({counter2, {dec, 7}}),
+
+    meck:new(folsom_ets),
+    meck:expect(folsom_ets, notify, fun(_Event) -> meck:exception(error, something_wrong_with_ets) end),
+    {'EXIT', {something_wrong_with_ets, _}} = folsom_metrics:safely_notify({unknown_counter, {inc, 1}}),
+    meck:unload(folsom_ets),
 
     ok = folsom_metrics:notify({<<"gauge">>, 2}),
 
@@ -145,6 +166,12 @@ populate_metrics() ->
 
 check_metrics() ->
     0 = folsom_metrics:get_metric_value(counter),
+
+    3 = folsom_metrics:get_metric_value(counter2),
+
+    ok = folsom_metrics:notify_existing_metric(counter2, clear, counter),
+
+    0 = folsom_metrics:get_metric_value(counter2),
 
     2 = folsom_metrics:get_metric_value(<<"gauge">>),
 
@@ -214,11 +241,48 @@ check_metrics() ->
     %% check spiral
     [{count, 100}, {one, 100}] = folsom_metrics:get_metric_value(spiral).
 
+check_group_metrics() ->
+    Group = "mygroup",
+    Metrics = folsom_metrics:get_metrics_value(Group),
+    5 = length(Metrics),
+    {counter, 0} = lists:keyfind(counter,1,Metrics),
+    {counter2, 0} = lists:keyfind(counter2,1,Metrics),
+    {<<"gauge">>, 2} = lists:keyfind(<<"gauge">>,1,Metrics),
+
+    {meter, Meter} = lists:keyfind(meter,1,Metrics),
+    ok = case proplists:get_value(one, Meter) of
+             Value when Value > 1 ->
+                 ok;
+             _ ->
+                 error
+         end,
+    ok = case proplists:get_value(day, Meter) of
+             Value1 when Value1 > 0.005 ->
+                 ok;
+             _ ->
+                 error
+         end,
+
+    {spiral, [{count, 100}, {one, 100}]} = lists:keyfind(spiral,1,Metrics),
+
+    Counters = folsom_metrics:get_metrics_value(Group,counter),
+    {counter, 0} = lists:keyfind(counter,1,Counters),
+    {counter2, 0} = lists:keyfind(counter2,1,Counters),
+
+    ok = folsom_metrics:untag_metric(counter2, Group),
+    ok = folsom_metrics:untag_metric(<<"gauge">>, Group),
+    ok = folsom_metrics:untag_metric(meter, Group),
+    ok = folsom_metrics:untag_metric(spiral, Group),
+    ?debugFmt("~n~nuntagged metrics: ~p, ~p, ~p and ~p in group ~p~n", [counter2,<<"gauge">>,meter,spiral,Group]),
+    RemainingMetrics = folsom_metrics:get_metrics_value(Group),
+    1 = length(RemainingMetrics),
+    {counter, 0} = lists:keyfind(counter,1,Metrics).
 
 delete_metrics() ->
-    16 = length(ets:tab2list(?FOLSOM_TABLE)),
+    17 = length(ets:tab2list(?FOLSOM_TABLE)),
 
     ok = folsom_metrics:delete_metric(counter),
+    ok = folsom_metrics:delete_metric(counter2),
     ok = folsom_metrics:delete_metric(<<"gauge">>),
 
     ok = folsom_metrics:delete_metric(<<"hugedata">>),
@@ -389,5 +453,14 @@ duration_check(Duration) ->
                                                         kurtosis, percentile, histogram]],
     ?assertEqual(10, proplists:get_value(count, Duration)),
     Last = proplists:get_value(last, Duration),
-    ?assert(Last > 10000),
-    ?assert(Last < 15000).
+    ?assert(Last > 10000).
+
+create_delete_metrics() ->
+    ?assertMatch(ok, folsom_metrics:new_counter(counter)),
+    ?assertMatch(ok, folsom_metrics:notify_existing_metric(counter, {inc, 1}, counter)),
+    ?assertMatch(1, folsom_metrics:get_metric_value(counter)),
+    ?assertMatch(ok, folsom_metrics:delete_metric(counter)),
+    ?assertError(badarg, folsom_metrics:notify_existing_metric(counter, {inc, 1}, counter)),
+    ?assertMatch(ok, folsom_metrics:new_counter(counter)),
+    ?assertMatch(ok, folsom_metrics:notify_existing_metric(counter, {inc, 1}, counter)),
+    ?assertMatch(1, folsom_metrics:get_metric_value(counter)).

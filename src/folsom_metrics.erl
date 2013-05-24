@@ -41,13 +41,20 @@
          new_duration/4,
          new_spiral/1,
          delete_metric/1,
+         tag_metric/2,
+         untag_metric/2,
          notify/1,
          notify/2,
          notify/3,
+         safely_notify/1,
+         safely_notify/2,
+         safely_notify/3,
          notify_existing_metric/3,
          get_metrics/0,
          metric_exists/1,
          get_metrics_info/0,
+         get_metrics_value/1,
+         get_metrics_value/2,
          get_metric_info/1,
          get_metric_value/1,
          get_histogram_statistics/1,
@@ -109,6 +116,12 @@ new_duration(Name, SampleType, SampleSize, Alpha) ->
 new_spiral(Name) ->
     folsom_ets:add_handler(spiral, Name).
 
+tag_metric(Name, Tag) ->
+    folsom_ets:tag_handler(Name, Tag).
+
+untag_metric(Name, Tag) ->
+    folsom_ets:untag_handler(Name, Tag).
+
 delete_metric(Name) ->
     folsom_ets:delete_handler(Name).
 
@@ -121,6 +134,15 @@ notify(Name, Event) ->
 notify(Name, Event, Type) ->
     folsom_ets:notify(Name, Event, Type).
 
+safely_notify(Event) ->
+  catch notify(Event).
+
+safely_notify(Name, Event) ->
+  catch notify(Name, Event).
+
+safely_notify(Name, Event, Type) ->
+  catch notify(Name, Event, Type).
+
 notify_existing_metric(Name, Event, Type) ->
     folsom_ets:notify_existing_metric(Name, Event, Type).
 
@@ -132,6 +154,12 @@ metric_exists(Name) ->
 
 get_metrics_info() ->
     folsom_ets:get_handlers_info().
+
+get_metrics_value(Tag) ->
+    folsom_ets:get_group_values(Tag).
+
+get_metrics_value(Tag, Type) ->
+    folsom_ets:get_group_values(Tag, Type).
 
 get_metric_info(Name) ->
     [folsom_ets:get_info(Name)].
